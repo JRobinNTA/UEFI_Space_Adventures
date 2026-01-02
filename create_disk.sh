@@ -1,5 +1,5 @@
 #!/bin/bash
-# create_disk.sh - Distro-agnostic UEFI disk image creator
+# create_disk.sh - UEFI disk image creator
 set -e
 
 IMAGE="uefi_disk.img"
@@ -34,74 +34,24 @@ mcopy -i "$IMAGE" "$BINARY" ::/EFI/BOOT/BOOTX64.EFI
 
 echo "Verifying image contents:"
 mdir -i "$IMAGE" ::/EFI/BOOT
+
 echo ""
 echo "✓ Created $IMAGE successfully!"
 echo ""
 
-# Detect OVMF firmware location (distro-agnostic)
-OVMF_CODE=""
-OVMF_VARS=""
-OVMF_VARS_COPY="OVMF_VARS.fd"  # Local writable copy
+# Hardcoded OVMF paths
+OVMF_CODE="OVMF_CODE.fd"
+OVMF_VARS="OVMF_VARS.fd"
 
-# Try different possible locations
-if [ -f "/usr/share/ovmf/x64/OVMF_CODE.4m.fd" ]; then
-    # Ubuntu/Debian with 4MB firmware
-    OVMF_CODE="/usr/share/ovmf/x64/OVMF_CODE.4m.fd"
-    OVMF_VARS="/usr/share/ovmf/x64/OVMF_VARS.4m.fd"
-    echo "Detected: Ubuntu/Debian OVMF (4MB)"
-elif [ -f "/usr/share/ovmf/OVMF.fd" ]; then
-    # Arch Linux unified firmware
-    OVMF_CODE="/usr/share/ovmf/OVMF.fd"
-    OVMF_VARS=""  # Arch uses unified firmware
-    echo "Detected: Arch Linux OVMF (unified)"
-elif [ -f "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd" ]; then
-    # Fedora/RHEL location
-    OVMF_CODE="/usr/share/edk2-ovmf/x64/OVMF_CODE.fd"
-    OVMF_VARS="/usr/share/edk2-ovmf/x64/OVMF_VARS.fd"
-    echo "Detected: Fedora/RHEL OVMF"
-elif [ -f "/usr/share/OVMF/OVMF_CODE.fd" ]; then
-    # Alternative common location
-    OVMF_CODE="/usr/share/OVMF/OVMF_CODE.fd"
-    OVMF_VARS="/usr/share/OVMF/OVMF_VARS.fd"
-    echo "Detected: Generic OVMF location"
-else
-    echo "Error: OVMF firmware not found!"
-    echo ""
-    echo "Please install OVMF for your distribution:"
-    echo "  Ubuntu/Debian: sudo apt install ovmf"
-    echo "  Arch Linux:    sudo pacman -S edk2-ovmf"
-    echo "  Fedora/RHEL:   sudo dnf install edk2-ovmf"
-    exit 1
-fi
-
-echo "Using OVMF firmware: $OVMF_CODE"
-
-# Prepare QEMU command based on firmware type
-QEMU_CMD="qemu-system-x86_64"
-
-if [ -n "$OVMF_VARS" ] && [ -f "$OVMF_VARS" ]; then
-    # Split CODE/VARS firmware (Ubuntu/Debian, Fedora)
-    echo "Copying OVMF VARS to local directory (writable copy)..."
-    cp "$OVMF_VARS" "$OVMF_VARS_COPY"
-    chmod 644 "$OVMF_VARS_COPY"
-    
-    echo "Launching QEMU with split firmware..."
-    $QEMU_CMD \
-        -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-        -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" \
-        -drive file="$IMAGE",format=raw \
-        -m 256M \
-        -net none \
-        -serial stdio \
-        -vga std
-else
-    # Unified firmware (Arch Linux)
-    echo "Launching QEMU with unified firmware..."
-    $QEMU_CMD \
-        -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-        -drive file="$IMAGE",format=raw \
-        -m 256M \
-        -net none \
-        -serial stdio \
-        -vga std
-fi
+echo "Launching QEMU..."
+qemu-system-x86_64 \
+    -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
+    -drive if=pflash,format=raw,file="$OVMF_VARS" \
+    -drive file="$IMAGE",format=raw \
+    -m 256M \
+    -net none \
+    -serial stdio \
+    -vga std \
+    -device qemu-xhci,id=xhci \
+    -device usb-mouse,bus=xhci.0 \
+    -device usb-tablet,bus=xhci.0

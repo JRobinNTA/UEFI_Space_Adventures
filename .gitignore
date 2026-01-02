@@ -3,3 +3,4 @@
 uefi_disk.img
 OVMF_VARS.fd
 /efi_root
+OVMF_CODE.fd
