@@ -27,6 +27,7 @@ Bash
 # From the project root
 chmod +x create_disk.sh
 ./create_disk.sh
+```
 
 📝 TODO List
 1. Architecture & OOP Refactor
