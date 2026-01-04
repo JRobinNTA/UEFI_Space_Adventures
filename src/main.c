@@ -132,11 +132,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         }
 
         /* Keyboard Event Triggered */
-        if (curScreen.redraw && index == 1) {
-
-            cin->ReadKeyStroke(cin, &key);
-            break;
-        }
+//        if (index == 1) {
+//
+//            cin->ReadKeyStroke(cin, &key);
+//            break;
+//        }
         /* If no input received skip */
         curScreen.redraw = FALSE;
     }
