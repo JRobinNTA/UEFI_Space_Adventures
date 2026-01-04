@@ -29,47 +29,59 @@ chmod +x create_disk.sh
 ./create_disk.sh
 ```
 
-📝 TODO List
-1. Architecture & OOP Refactor
+# 🗺️ Project Roadmap & TODO List
 
-    [ ] Fix Include Hell: Refactor headers to remove circular dependencies between main.h, helpers.h, and images.h. Implement a strictly hierarchical include strategy.
+## 🏗️ 1. Architecture & OOP Refactor
+> *Goal: Move from a monolithic procedural structure to a scalable, object-oriented engine.*
 
-    [ ] Object-Oriented Abstraction: Transition from procedural code to a "struct-as-class" pattern using function pointers:
+- [ ] **Fix "Include Hell"**
+  - Resolve circular dependencies between `main.h`, `helpers.h`, and `images.h`.
+  - Implement a strict top-down include strategy (e.g., `Types.h` -> `Protocols.h` -> `Core.h`).
+- [ ] **Object-Oriented Abstraction**
+  - Transition to "struct-as-class" patterns using function pointers:
+    - `Sprite`: Encapsulates `ImageData`, position, and `Draw()` logic.
+    - `Button`: Extends `Sprite` with `OnClick` callbacks and hover-state detection.
+    - `InputManager`: A singleton to abstract Mouse and Keyboard hardware events.
+- [ ] **Memory Management Audit**
+  - Standardize `Realloc` usage.
+  - Implement a safe `Free` mechanism to prevent memory leaks during scene transitions.
 
-        Sprite: Encapsulate ImageData, position, and Draw() logic.
+---
 
-        Button: Extend Sprite with OnClick callbacks and hover states.
+## 🖥️ 2. UI & Menu System
+> *Goal: Create a navigable game interface.*
 
-        InputManager: Singleton to abstract Mouse and Keyboard events.
+- [ ] **Global State Machine**
+  - Manage transitions between logic states: `BOOT` ➡️ `MAIN_MENU` ➡️ `SETTINGS` ➡️ `GAMEPLAY`.
+- [ ] **Interactive Main Menu**
+  - Build a clickable 8-bit interface using the newly implemented `Button` class.
+- [ ] **Settings Configuration**
+  - **Resolution Picker:** Query GOP modes and allow dynamic switching.
+  - **Input Sensitivity:** Slider to adjust mouse movement scaling.
+  - **Movement Toggle:** Switch between *Smooth Interpolation* and *Grid-Locked* movement.
 
-    [ ] Memory Management: Audit Realloc usage and implement a safe Free mechanism to prevent leaks during state transitions.
+---
 
-2. UI & Menu System
+## 🕹️ 3. Game Engine Core
+> *Goal: Standardize physics and rendering logic.*
 
-    [ ] State Machine: Implement a GameState handler to manage transitions between BOOT, MAIN_MENU, SETTINGS, and GAMEPLAY.
+- [ ] **Collision Engine**
+  - Implement **AABB (Axis-Aligned Bounding Box)** logic for cursor-to-button and sprite-to-sprite detection.
+- [ ] **Delta Time Integration**
+  - Use the UEFI High-Resolution Timer to calculate `deltaTime`.
+  - Ensure game physics (movement/animations) remain consistent regardless of CPU clock speed.
+- [ ] **Blt Logic Optimization**
+  - Refine the "Dirty Rectangle" system to minimize framebuffer writes by only restoring regions modified in the previous frame.
 
-    [ ] Main Menu: Build a clickable 8-bit interface using the Button class.
+---
 
-    [ ] Settings Menu:
+## 🛠️ 4. Stability & Build Tooling
+> *Goal: Improve the developer experience and hardware compatibility.*
 
-        Dynamic Resolution Picker (querying and switching GOP modes).
-
-        Mouse Sensitivity slider.
-
-        Toggle for movement interpolation (Smooth vs. Grid-Locked).
-
-3. Game Engine Implementation
-
-    [ ] Collision Engine: Implement AABB (Axis-Aligned Bounding Box) logic for sprite-to-sprite and cursor-to-button interactions.
-
-    [ ] Delta Time Integration: Use the UEFI Timer event to calculate time-deltas, ensuring game physics remain consistent across different CPU speeds.
-
-    [ ] Refine Blt Logic: Optimize the "Dirty Rectangle" system to ensure background restoration only occurs for modified screen regions.
-
-4. Stability & Build Tooling
-
-    [ ] GOP Resize Handling: Add a callback to refresh GOP pointers and screen dimensions when QEMU/Hardware changes resolutions to prevent #UD (Invalid Opcode) exceptions.
-
-    [ ] Asset Pipeline: Automate the conversion of .png or .bmp files into C-style ImageData arrays during the CMake build process.
-
-    [ ] QEMU Debugging: Add GDB support to create_disk.sh using QEMU -s -S flags.
+- [ ] **GOP Resize Handling**
+  - Add callbacks to refresh GOP pointers and screen dimensions on resolution change.
+  - *Fix:* Prevents the `#UD (Invalid Opcode)` exception during QEMU window resizing.
+- [ ] **Automated Asset Pipeline**
+  - Integrate a script into the `CMake` build process to convert `.png` or `.bmp` files directly into C-style `ImageData` arrays.
+- [ ] **Advanced Debugging**
+  - Update `create_disk.sh` to support GDB attachment via QEMU `-s -S` flags.
