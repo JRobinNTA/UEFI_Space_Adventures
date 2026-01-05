@@ -10,6 +10,10 @@ Screen curScreen = {
     .isRunning = FALSE
 };
 
+Game curGame = {
+    .state = LAUNCH,
+};
+
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable) {
 
     Globalize(ImageHandle, SystemTable);
@@ -108,7 +112,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     INTN X = curCursor.X, Y = curCursor.Y;
 
     EFI_SIMPLE_POINTER_STATE State;
-    curScreen.isRunning = TRUE;
     /* 30 Frames per second */
     gBS->SetTimer(
         Events[2],
@@ -116,6 +119,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         333333
     );
     /* Main Event Loop */
+
+    curScreen.isRunning = TRUE;
     while(curScreen.isRunning){
         /* Wait for the timer and mouse input or keyboard input */
         gBS->WaitForEvent(3,Events,&index);

@@ -34,6 +34,18 @@ typedef struct{
     ImageData clickedimg;
 }Cursor;
 
+typedef enum{
+    LAUNCH,
+    MENU,
+    PLAYING,
+    PAUSED
+}GameState;
+
+typedef struct{
+    GameState state;
+
+}Game;
+
 extern Screen curScreen;
 
 VOID* Realloc(void* Oldptr, UINTN Oldsize, UINTN Newsize);

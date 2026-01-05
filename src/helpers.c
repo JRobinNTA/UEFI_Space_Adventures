@@ -380,7 +380,6 @@ VOID DrawAlphaAwareImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img
             }
         }
     }
-    curScreen.redraw = FALSE;
 }
 
 
