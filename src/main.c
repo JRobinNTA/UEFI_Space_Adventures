@@ -39,20 +39,32 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         .Lclicked = FALSE,
         .Rclicked = FALSE,
         .Over = {
-            .Width = 64,  // Actual screen width (8 clean pixels * 8)
-            .Height = 64, // Actual screen height
+            .Width = Pointer.Width*8,  // Actual screen width (8 clean pixels * 8)
+            .Height = Pointer.Height*8, // Actual screen height
             // Allocate for 64x64 ACTUAL pixels
-            .Data = Realloc(NULL, 0, 64 * 64 * sizeof(UINT32)), 
+            .Data = Realloc(NULL, 0, (8*Pointer.Width) * (8*Pointer.Height) * sizeof(UINT32)), 
         },
         .normalimg = Pointer, // Your "Clean" 8x8 image data
         .clickedimg = ClickedPointer,
     };
     EFI_STATUS Status;
-    DrawPixelatedBackground(Graphics, &BgImage);
-    Graphics->Blt(Graphics, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)curCursor.Over.Data, 
-                  EfiBltVideoToBltBuffer, curCursor.X, curCursor.Y, 0, 0, 64, 64, 0);
 
-
+    /* Draw the background */
+    DrawAlphaAwareImage(Graphics, &BgImage, 0, 0, 0);
+    DrawAlphaAwareImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8, 1);
+    /* Save the underlying bits of the cursor */
+    Graphics->Blt(
+        Graphics, 
+        (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)curCursor.Over.Data, 
+        EfiBltVideoToBltBuffer, 
+        curCursor.X,
+        curCursor.Y,
+        0,
+        0,
+        curCursor.Over.Width, 
+        curCursor.Over.Height, 
+        0
+    );
 
     if (activeMouse == NULL) {
         cout->OutputString(cout, L"\rNo mouse available for interactive test!\n");
@@ -70,7 +82,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     Status = gBS->CreateEvent(
         EVT_TIMER | EVT_NOTIFY_SIGNAL,
         TPL_CALLBACK,           /* Priority level */
-        ScreenUpdate,                   /* No notification function */
+        ScreenUpdate,           /* No notification function */
         NULL,                   /* No context */
         &timerEvent             /* Output: event handle */
     );
@@ -132,11 +144,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         }
 
         /* Keyboard Event Triggered */
-//        if (index == 1) {
-//
-//            cin->ReadKeyStroke(cin, &key);
-//            break;
-//        }
+        if (index == 1) {
+
+            Status = cin->ReadKeyStroke(cin, &key);
+            if(EFI_ERROR(Status)){
+                break;
+            }
+            /* Shutdown if ESC is pressed */
+            else if(key.ScanCode == SCAN_ESC){
+                gRS->ResetSystem(EfiResetShutdown, EFI_SUCCESS, 0, NULL);
+                break;
+            }
+        }
         /* If no input received skip */
         curScreen.redraw = FALSE;
     }

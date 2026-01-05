@@ -324,20 +324,15 @@ EFI_GRAPHICS_OUTPUT_PROTOCOL* InitGraphics(UINTN targetWidth, UINTN targetHeight
 
 // Draw rectangle
 void DrawRect(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 x, UINT32 y, UINT32 color) {
-    UINT32 *framebuffer = (UINT32*)gop->Mode->FrameBufferBase;
-    UINT32 screenWidth = gop->Mode->Info->PixelsPerScanLine;
-    
-    // Pointer to the top-left start position
-    UINT32 *base = framebuffer + (y * screenWidth) + x;
-
-    for (UINT32 row = 0; row < 8; row++) {
-        // We write 8 pixels in a row as fast as possible
-        base[0] = color; base[1] = color; base[2] = color; base[3] = color;
-        base[4] = color; base[5] = color; base[6] = color; base[7] = color;
-        
-        // Move to the next scanline
-        base += screenWidth;
-    }
+    gop->Blt(
+        gop,
+        (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)&color,  // Source: single color
+        EfiBltVideoFill,                          // Operation: fill with color
+        0, 0,                                     // Source X, Y (ignored for fill)
+        x, y,                                     // Destination X, Y on screen
+        8, 8,                                     // Width, Height (8x8 block)
+        0                                         // Delta (ignored for fill)
+    );
 }
 
 BOOLEAN BinaryAlpha(UINT32 Pixel){
@@ -351,7 +346,7 @@ BOOLEAN BinaryAlpha(UINT32 Pixel){
 Draw a given image to screen
 ============================
 */
-VOID DrawImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img, UINT32 x, UINT32 y, BOOLEAN Alpha) {
+VOID DrawAlphaAwareImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img, UINT32 x, UINT32 y, BOOLEAN Alpha) {
     if (gop == NULL || img == NULL || img->Data == NULL) {
         return;
     }
@@ -388,69 +383,22 @@ VOID DrawImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img, UINT32 x
     curScreen.redraw = FALSE;
 }
 
-VOID SaveImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, ImageData *img, UINT32 x, UINT32 y){
-     if (gop == NULL || img == NULL || img->Data == NULL) {
-        return;
-    }
-    UINT32 *framebuffer = (UINT32*)gop->Mode->FrameBufferBase;
-    UINT32 pitch = gop->Mode->Info->PixelsPerScanLine;
-    for (UINT32 imgY = 0; imgY < img->Height; imgY++) {
 
-        // Multiply by 8 to scale the position back up for the screen
-        UINT32 screenY = y + (imgY * 8);
-
-        if (screenY >= curScreen.ScreenHeight) break;
-
-        for (UINT32 imgX = 0; imgX < img->Width; imgX++) {
-
-            UINT32 screenX = x + (imgX * 8);
-
-            if (screenX >= curScreen.ScreenWidth) continue;
-
-            // Since it's a standard array now, index normally
-            UINT32 pixelIndex = imgY * img->Width + imgX;
-
-            // Draw an 8x8 block for this single pixel data
-            img->Data[pixelIndex] = framebuffer[screenY*pitch+screenX];
-
-        }
-    }
-}
-VOID DrawPixelatedBackground(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img) {
-    for (UINT32 imgY = 0; imgY < img->Height; imgY++) {
-        for (UINT32 imgX = 0; imgX < img->Width; imgX++) {
-            UINT32 color = img->Data[imgY * img->Width + imgX];
-            
-            // Draw an 8x8 block using hardware-accelerated Fill
-            gop->Blt(
-                gop,
-                (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)&color,
-                EfiBltVideoFill,
-                0, 0,           // Ignored
-                imgX * 8, imgY * 8, // Screen X, Y
-                8, 8,           // Block size
-                0               // Delta
-            );
-        }
-    }
-}
 VOID DoCursor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, Cursor *cur, INTN curX, INTN curY) {
     if (!cur->moved || Graphics == NULL) return;
 
     // RESTORE using 64x64 screen area
-    Graphics->Blt(Graphics, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)cur->Over.Data, 
-                  EfiBltBufferToVideo, 0, 0, cur->X, cur->Y, 64, 64, 0);
+    DrawDirectImage(Graphics, &cur->Over, cur->X, cur->Y);
 
     // SAVE using 64x64 screen area
-    Graphics->Blt(Graphics, (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)cur->Over.Data, 
-                  EfiBltVideoToBltBuffer, curX, curY, 0, 0, 64, 64, 0);
+    SaveDirectImage(Graphics, &cur->Over, curX, curY);
 
     // DRAW the cursor using your 8x8 clean data (DrawImage scales it to 64x64)
     if(cur->Lclicked || cur->Rclicked){
-        DrawImage(Graphics, &cur->clickedimg, curX, curY, 1);
+        DrawAlphaAwareImage(Graphics, &cur->clickedimg, curX, curY, 1);
     }
     else {
-        DrawImage(Graphics, &cur->normalimg, curX, curY, 1);
+        DrawAlphaAwareImage(Graphics, &cur->normalimg, curX, curY, 1);
     }
 
     cur->X = curX;
@@ -462,4 +410,36 @@ VOID DoCursor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, Cursor *cur, INTN curX, IN
 
 VOID EFIAPI ScreenUpdate(EFI_EVENT Event, VOID *Context) {
     curScreen.redraw = TRUE;
+}
+
+VOID SaveDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,ImageData* img, UINTN screenX, UINTN screenY){
+    Graphics->Blt(
+        Graphics, 
+        (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)img->Data, 
+        EfiBltVideoToBltBuffer, 
+        screenX, 
+        screenY, 
+        0, 
+        0, 
+        img->Width, 
+        img->Height, 
+        0
+    );
+
+}
+VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UINTN imgX, UINTN imgY){
+
+    Graphics->Blt(
+        Graphics, 
+        (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)img->Data, 
+        EfiBltBufferToVideo, 
+        0, 
+        0, 
+        imgX, 
+        imgY,
+        img->Height, 
+        img->Width, 
+        0
+    );
+
 }
