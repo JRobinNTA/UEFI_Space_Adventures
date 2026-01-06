@@ -36,12 +36,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics = InitGraphics(curScreen.ScreenWidth,curScreen.ScreenHeight);
     EFI_SIMPLE_POINTER_PROTOCOL* activeMouse = InitMouse();
 
-    Cursor curCursor = {
-        .X = curScreen.ScreenWidth / 2,
-        .Y = curScreen.ScreenHeight / 2,
-        .moved = FALSE,
-        .Lclicked = FALSE,
-        .Rclicked = FALSE,
+    Mouse curMouse = {
+        .cursor.X = curScreen.ScreenWidth / 2,
+        .cursor.Y = curScreen.ScreenHeight / 2,
+        .cursor.isMoved = FALSE,
+        .cursor.Lclicked = FALSE,
+        .cursor.Rclicked = FALSE,
         .Over = {
             .Width = Pointer.Width*8,  // Actual screen width (8 clean pixels * 8)
             .Height = Pointer.Height*8, // Actual screen height
@@ -54,21 +54,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     EFI_STATUS Status;
 
     /* Draw the background */
-    DrawAlphaAwareImage(Graphics, &BgImage, 0, 0, 0);
-    DrawAlphaAwareImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8, 1);
+    DrawDirectImage(Graphics, &BgImage, 0, 0);
+    DrawAlphaAwareImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
     /* Save the underlying bits of the cursor */
-    Graphics->Blt(
-        Graphics, 
-        (EFI_GRAPHICS_OUTPUT_BLT_PIXEL*)curCursor.Over.Data, 
-        EfiBltVideoToBltBuffer, 
-        curCursor.X,
-        curCursor.Y,
-        0,
-        0,
-        curCursor.Over.Width, 
-        curCursor.Over.Height, 
-        0
-    );
+    SaveDirectImage(Graphics, &curMouse.Over, curMouse.cursor.X, curMouse.cursor.Y);
 
     if (activeMouse == NULL) {
         cout->OutputString(cout, L"\rNo mouse available for interactive test!\n");
@@ -109,17 +98,23 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         activeMouse->Reset(activeMouse, FALSE);
     }
 
-    INTN X = curCursor.X, Y = curCursor.Y;
+    Cursor cursPos ={
+        .Lclicked = curMouse.cursor.Lclicked,
+        .Rclicked = curMouse.cursor.Rclicked,
+        .X = curMouse.cursor.X,
+        .Y = curMouse.cursor.Y,
+        .isMoved = curMouse.cursor.isMoved,
+    };
 
-    EFI_SIMPLE_POINTER_STATE State;
     /* 30 Frames per second */
     gBS->SetTimer(
         Events[2],
         TimerPeriodic,
         333333
     );
+    patchImg *screenQue;
+    setupScreenQue(&screenQue);
     /* Main Event Loop */
-
     curScreen.isRunning = TRUE;
     while(curScreen.isRunning){
         /* Wait for the timer and mouse input or keyboard input */
@@ -127,24 +122,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
 
         if(index == 0){
              /* Get the current mouse state */
-            Status = activeMouse->GetState(activeMouse, &State);
-            X += State.RelativeMovementX/2048;
-            Y += State.RelativeMovementY/2048;
-            // Clamp values
-            if (X < 0) X = 0;
-            if (Y < 0) Y = 0;
-            if (X >= (INTN)(curScreen.ScreenWidth - (curCursor.normalimg.Width * 8))) 
-                X = curScreen.ScreenWidth - (curCursor.normalimg.Width * 8);
-            if (Y >= (INTN)(curScreen.ScreenHeight - (curCursor.normalimg.Height * 8))) 
-                Y = curScreen.ScreenHeight - (curCursor.normalimg.Height * 8);
-            if(State.LeftButton) curCursor.Lclicked = TRUE;
-            if(State.RightButton) curCursor.Rclicked = TRUE;
-            curCursor.moved = TRUE;
+            GetMouseUpdates(activeMouse, &cursPos);
 
         }
 
-        if (curScreen.redraw && curCursor.moved) {
-            DoCursor(Graphics, &curCursor, X, Y);
+        if (curScreen.redraw && cursPos.isMoved) {
+            DoCursor(Graphics, &curMouse, &cursPos);
             curScreen.redraw = FALSE;
         }
 

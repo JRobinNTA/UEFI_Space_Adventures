@@ -346,7 +346,7 @@ BOOLEAN BinaryAlpha(UINT32 Pixel){
 Draw a given image to screen
 ============================
 */
-VOID DrawAlphaAwareImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img, UINT32 x, UINT32 y, BOOLEAN Alpha) {
+VOID DrawAlphaAwareImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, ImageData *img, UINT32 x, UINT32 y) {
     if (gop == NULL || img == NULL || img->Data == NULL) {
         return;
     }
@@ -368,43 +368,38 @@ VOID DrawAlphaAwareImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, const ImageData *img
             UINT32 pixelIndex = imgY * img->Width + imgX;
 
             // Draw an 8x8 block for this single pixel data
-            if(Alpha){
-                if(BinaryAlpha(img->Data[pixelIndex])){
+            if(BinaryAlpha(img->Data[pixelIndex])){
 
-                    DrawRect(gop, screenX, screenY, img->Data[pixelIndex]);
-                }
-                else continue;
-            }
-            else{
                 DrawRect(gop, screenX, screenY, img->Data[pixelIndex]);
             }
+            else continue;
         }
     }
 }
 
 
-VOID DoCursor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, Cursor *cur, INTN curX, INTN curY) {
-    if (!cur->moved || Graphics == NULL) return;
+VOID DoCursor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, Mouse *cur, Cursor *curCurs) {
+    if (!curCurs->isMoved || Graphics == NULL) return;
 
     // RESTORE using 64x64 screen area
-    DrawDirectImage(Graphics, &cur->Over, cur->X, cur->Y);
+    DrawDirectImage(Graphics, &cur->Over, cur->cursor.X, cur->cursor.Y);
 
     // SAVE using 64x64 screen area
-    SaveDirectImage(Graphics, &cur->Over, curX, curY);
+    SaveDirectImage(Graphics, &cur->Over, curCurs->X, curCurs->Y);
 
     // DRAW the cursor using your 8x8 clean data (DrawImage scales it to 64x64)
-    if(cur->Lclicked || cur->Rclicked){
-        DrawAlphaAwareImage(Graphics, &cur->clickedimg, curX, curY, 1);
+    if(cur->cursor.Lclicked || cur->cursor.Rclicked){
+        DrawAlphaAwareImage(Graphics, &cur->clickedimg, curCurs->X, curCurs->Y);
     }
     else {
-        DrawAlphaAwareImage(Graphics, &cur->normalimg, curX, curY, 1);
+        DrawAlphaAwareImage(Graphics, &cur->normalimg, curCurs->X, curCurs->Y);
     }
-
-    cur->X = curX;
-    cur->Y = curY;
-    cur->moved = FALSE;
-    cur->Lclicked = FALSE;
-    cur->Rclicked = FALSE;
+    curCurs->isMoved = FALSE;
+    cur->cursor.X = curCurs->X;
+    cur->cursor.Y = curCurs->Y;
+    cur->cursor.isMoved = FALSE;
+    cur->cursor.Lclicked = FALSE;
+    cur->cursor.Rclicked = FALSE;
 }
 
 VOID EFIAPI ScreenUpdate(EFI_EVENT Event, VOID *Context) {
@@ -426,6 +421,23 @@ VOID SaveDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,ImageData* img, UINT
     );
 
 }
+
+VOID SaveIndirectImage(ImageData *saveImg, ImageData *bufferImg, UINTN imgX, UINTN imgY){
+    for (UINTN row = 0; row < bufferImg->Height; row++) {
+        // Calculate the row offset in the full-size background
+        UINTN bgOffset = ((imgY + row) * bufferImg->Width) + imgX;
+        // Calculate the row offset in the small 64x64 patch
+        UINTN patchOffset = row * bufferImg->Width;
+
+        // Perform a high-speed memory copy (RAM to RAM)
+        gBS->CopyMem(
+            &bufferImg->Data[patchOffset], 
+            &saveImg->Data[bgOffset], 
+            bufferImg->Width * sizeof(UINT32)
+        );
+    }
+}
+
 VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UINTN imgX, UINTN imgY){
 
     Graphics->Blt(
@@ -441,4 +453,115 @@ VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UIN
         0
     );
 
+}
+
+VOID GetMouseUpdates(EFI_SIMPLE_POINTER_PROTOCOL *Mouse, Cursor *cursPos){
+    EFI_SIMPLE_POINTER_STATE State;
+    EFI_STATUS Status;
+    Status = Mouse->GetState(Mouse, &State);
+    if(Status == EFI_NOT_READY){
+        cursPos->isMoved = FALSE;
+    }
+    cursPos->X += State.RelativeMovementX/2048;
+    cursPos->Y += State.RelativeMovementY/2048;
+    // Clamp values
+    if (cursPos->X < 0) cursPos->X = 0;
+    if (cursPos->Y < 0) cursPos->Y = 0;
+    if (cursPos->X >= (INTN)(curScreen.ScreenWidth - 64)) 
+        cursPos->X = curScreen.ScreenWidth - 64;
+    if (cursPos->Y >= (INTN)(curScreen.ScreenHeight - 64)) 
+        cursPos->Y = curScreen.ScreenHeight - 64;
+    if(State.LeftButton) cursPos->Lclicked = TRUE;
+    if(State.RightButton) cursPos->Rclicked = TRUE;
+    cursPos->isMoved = TRUE;
+}
+
+VOID setupScreenQue(patchImg** pQue) {
+    // Allocate all 8 slots at once
+    *pQue = Realloc(NULL, 0, 16 * sizeof(patchImg));
+
+    if (*pQue == NULL) return;
+
+    for (UINTN i = 0; i < 16; i++) {
+        // Access using the arrow on the base pointer, then index
+        (*pQue)[i].imageState = STALE; 
+        (*pQue)[i].Img = NULL;
+        (*pQue)[i].replacedImg = NULL;
+        (*pQue)[i].X = 0;
+        (*pQue)[i].Y = 0;
+    }
+}
+patchImg* RequestPatchFromPool(patchImg *pQue){
+    patchImg* found = NULL;
+    for(UINTN i = 0; i < 16; i++){
+        /* Find the first inactive buffer and push the image */
+        if(pQue[i].imageState == STALE && !pQue[i].isDrawn){
+            found = &pQue[i];
+        }
+
+    }
+    return found;
+}
+
+
+VOID InternalDrawPatch(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, patchImg *pQue){
+    switch(pQue->imgtype){
+        case FFAWARE:{
+            DrawDirectImage(Graphics,pQue->Img,pQue->X,pQue->Y);
+            break;
+        }
+        case FFUAWARE:{
+            DrawAlphaAwareImage(Graphics, pQue->Img, pQue->X, pQue->Y);
+            break;
+        }
+        case PFAWARE:{
+            DrawAlphaAwareImage(Graphics,pQue->Img,pQue->X,pQue->Y);
+            break;
+        }
+        case PFUAWARE:{
+            DrawDirectImage(Graphics,pQue->Img,pQue->X,pQue->Y);
+            break;
+        }
+    }
+}
+
+VOID DoScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, patchImg *pQue){
+    for(UINTN i = 0; i < 16; i++){
+        switch(pQue[i].imageState){
+            /* Draw the image */
+            case ACTIVE:{
+                InternalDrawPatch(Graphics,&pQue[i]);
+                pQue[i].imageState = STALE;
+                pQue[i].isDrawn = TRUE;
+                break;
+            }
+            /* Replace the image */
+            case STALE:{
+                if(pQue[i].isDrawn){
+                    DrawDirectImage(Graphics,pQue[i].replacedImg,pQue[i].X,pQue[i].Y);
+                    pQue[i].isDrawn = FALSE;
+                }
+                break;
+            }
+            /* Count the frames for which artifact must persist */
+            case PERSIST:{
+                if(pQue[i].isDrawn){
+                    pQue[i].Cframes++;
+                    if(pQue[i].Cframes >= pQue[i].Nframes) pQue[i].imageState = STALE;
+                }
+                else{
+                    InternalDrawPatch(Graphics,&pQue[i]);
+                    pQue[i].isDrawn = TRUE;
+                }
+                break;
+            }
+            case PERMANENT:{
+                if(!pQue[i].isDrawn){
+                    InternalDrawPatch(Graphics,&pQue[i]);
+                    pQue[i].isDrawn = TRUE;
+                }
+                break;
+            }
+        }
+    }
 }
