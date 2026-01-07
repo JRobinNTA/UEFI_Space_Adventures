@@ -1,6 +1,7 @@
 #pragma once
 #include "efibind.h"
-#include "helpers.h"
+#include "Graphics.h"
+#include "efidef.h"
 
 
 
@@ -108,6 +109,8 @@ static ImageData BgImage = {
     .Height = 96,
     .Width = 160,
     .Data = image_data,
+    .isPixel = TRUE,
+    .isAlpha = FALSE,
 };
 
 static UINT32 pointer[]  = {
@@ -137,12 +140,16 @@ static UINT32 clickedpointer[]  = {
 static ImageData Pointer = {
     .Height = 8,
     .Width = 8,
-    .Data = pointer
+    .Data = pointer,
+    .isPixel = TRUE,
+    .isAlpha = TRUE,
 };
 static ImageData ClickedPointer= {
     .Height = 8,
     .Width = 8,
-    .Data = clickedpointer
+    .Data = clickedpointer,
+    .isPixel = TRUE,
+    .isAlpha = TRUE,
 };
 
 
@@ -202,6 +209,8 @@ static ImageData IntroLayerOne = {
     .Height = 48,
     .Width = 160,
     .Data = introlayerone,
+    .isPixel = TRUE,
+    .isAlpha = TRUE,
 };
 
 static UINT32 rocket[]  = {
@@ -259,4 +268,6 @@ static ImageData Rocket = {
     .Height = 48,
     .Width = 28,
     .Data = rocket,
+    .isPixel = TRUE,
+    .isAlpha = TRUE,
 };

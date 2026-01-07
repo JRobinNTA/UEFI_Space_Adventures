@@ -1,7 +1,6 @@
-#include "main.h"
-#include "efidef.h"
 #include "efierr.h"
-#include "images.h"
+#include "Helpers.h"
+#include "Images.h"
 
 Screen curScreen = {
     .ScreenHeight = 768,
@@ -13,6 +12,10 @@ Screen curScreen = {
 Game curGame = {
     .state = LAUNCH,
 };
+
+ImageData curBgImg;
+
+ImageData patchBuffer;
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable) {
 
@@ -34,19 +37,24 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     );
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics = InitGraphics(curScreen.ScreenWidth,curScreen.ScreenHeight);
+    patchBuffer.Data = Realloc(NULL,0,sizeof(UINT32)*curScreen.ScreenHeight*curScreen.ScreenWidth);
+    patchBuffer.Height = curScreen.ScreenHeight;
+    patchBuffer.Width = curScreen.ScreenWidth;
     EFI_SIMPLE_POINTER_PROTOCOL* activeMouse = InitMouse();
 
     Mouse curMouse = {
         .cursor.X = curScreen.ScreenWidth / 2,
         .cursor.Y = curScreen.ScreenHeight / 2,
-        .cursor.isMoved = FALSE,
+        .cursor.reDraw = FALSE,
         .cursor.Lclicked = FALSE,
         .cursor.Rclicked = FALSE,
         .Over = {
             .Width = Pointer.Width*8,  // Actual screen width (8 clean pixels * 8)
             .Height = Pointer.Height*8, // Actual screen height
             // Allocate for 64x64 ACTUAL pixels
-            .Data = Realloc(NULL, 0, (8*Pointer.Width) * (8*Pointer.Height) * sizeof(UINT32)), 
+            .Data = Realloc(NULL, 0, (8*Pointer.Width) * (8*Pointer.Height) * sizeof(UINT32)),
+            .isAlpha = FALSE,
+            .isPixel = FALSE,
         },
         .normalimg = Pointer, // Your "Clean" 8x8 image data
         .clickedimg = ClickedPointer,
@@ -54,11 +62,19 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     EFI_STATUS Status;
 
     /* Draw the background */
-    DrawDirectImage(Graphics, &BgImage, 0, 0);
-    DrawAlphaAwareImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
+    curBgImg = BgImage;
+    patchImg *pQue;
+    setupScreenQue(&pQue);
+    patchImg *Img_Rocket = RequestPatchFromPool(pQue);
+    Img_Rocket->Nframes = 99;
+    Img_Rocket->Img = &Rocket;
+    Img_Rocket->X = 640;
+    Img_Rocket->Y = 768;
+    Img_Rocket->imageState = PERSIST;
+    DrawScreenUpdates(Graphics, &BgImage, FALSE, 0, 0);
+    DrawAAwarePixelImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
     /* Save the underlying bits of the cursor */
     SaveDirectImage(Graphics, &curMouse.Over, curMouse.cursor.X, curMouse.cursor.Y);
-
     if (activeMouse == NULL) {
         cout->OutputString(cout, L"\rNo mouse available for interactive test!\n");
         cout->OutputString(cout, L"\rPress any key to exit!\n");
@@ -103,7 +119,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         .Rclicked = curMouse.cursor.Rclicked,
         .X = curMouse.cursor.X,
         .Y = curMouse.cursor.Y,
-        .isMoved = curMouse.cursor.isMoved,
+        .reDraw = curMouse.cursor.reDraw,
     };
 
     /* 30 Frames per second */
@@ -126,7 +142,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
 
         }
 
-        if (curScreen.redraw && cursPos.isMoved) {
+        if (curScreen.redraw && cursPos.reDraw) {
             DoCursor(Graphics, &curMouse, &cursPos);
             curScreen.redraw = FALSE;
         }
