@@ -110,70 +110,78 @@ VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UIN
 }
 
 
-
-
 VOID ExplodeAAwarePixelImage(
-    ImageData *Pimg,                // Foreground Sprite (Downscaled 8x8)
-    ImageData *NPimg,               // Destination (Exploded 64x64)
-    UINTN factor,
-    zOrder order,                   // The Layer of the CURRENT sprite
-    BOOLEAN skipCur,                // Skip the current layer (Eraser mode)
-    EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
+    ImageData *Pimg,            // Logical sprite (e.g. 8x8)
+    ImageData *NPimg,           // Screen-space output (e.g. 64x64)
+    UINTN factor,               // Usually 8
+    zOrder order,               // The layer the sprite belongs to
+    BOOLEAN skipCur,            // If TRUE, don't draw Pimg (used for restoring background)
+    // EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
     UINTN screenX, UINTN screenY
 ) {
-    // 1. Set dimensions for the Destination
+    if (!Pimg || !NPimg || !Pimg->Data || factor == 0) return;
+
+    // 1. Setup Output Dimensions
+    NPimg->Width  = Pimg->Width  * factor;
     NPimg->Height = Pimg->Height * factor;
-    NPimg->Width = Pimg->Width * factor;
+    // UINTN dstSize = NPimg->Width * NPimg->Height;
 
-    // --- PHASE 1: FETCH BASE BACKGROUND (LAYER 0) ---
-    if (curLayers[0].Img != NULL) {
+    // 2. Calculate Grid Coordinates (Where are we in the 160x96 buffers?)
+    UINTN gridX = screenX / factor;
+    UINTN gridY = screenY / factor;
+
+    // 3. Painter's Algorithm Loop: Layer 0 -> 1 -> 2 -> 3
+    for (UINTN layer = 0; layer < 4; layer++) {
+
+        ImageData *globalLayer = curLayers[layer].Img;
         
-        UINTN patchTotalSize = patchBuffer.Width * patchBuffer.Height; 
-        UINTN spriteSmallSize = Pimg->Width * Pimg->Height;            
-        
-        UINT32* safeMemoryZone = &patchBuffer.Data[patchTotalSize - spriteSmallSize];
+        // --- STEP A: Draw the Global Layer Data for this patch ---
+        if (globalLayer && globalLayer->Data) {
+            for (UINTN i = 0; i < Pimg->Height; i++) {
+                UINTN srcY = gridY + i;
+                if (srcY >= globalLayer->Height) continue;
 
-        ImageData bgTmp = {
-            .Width = Pimg->Width,     
-            .Height = Pimg->Height,   
-            .Data = safeMemoryZone,   
-            .isPixel = FALSE,         // <--- FIX IS HERE (Was TRUE)
-            .isAlpha = FALSE
-        };
+                for (UINTN j = 0; j < Pimg->Width; j++) {
+                    UINTN srcX = gridX + j;
+                    if (srcX >= globalLayer->Width) continue;
 
-        // Capture 8x8 from Background Layer into 'safeMemoryZone'
-        // Since isPixel is FALSE, SaveIndirectImage treats it as a raw, packed buffer.
-        SaveIndirectImage(curLayers[0].Img, &bgTmp, screenX, screenY);
+                    // Fetch pixel from the global collision buffer
+                    UINT32 px = globalLayer->Data[srcY * globalLayer->Width + srcX];
 
-        // Explode from 'safeMemoryZone' (8x8) into 'NPimg->Data' (64x64)
-        ExplodeAUnAwarePixelImage(&bgTmp, NPimg, factor);
-    } 
-    else {
-        // Fallback: Raw screen capture
-        SaveDirectImage(Graphics, NPimg, screenX, screenY);
-    }
+                    // Layer 0 is the base (Opaque), others adhere to Alpha
+                    if (layer == 0 || BinaryAlpha(px)) {
+                        
+                        // Explode the pixel (1x1 -> 8x8)
+                        for (UINTN v = 0; v < factor; v++) {
+                            UINTN rowBase = ((i * factor) + v) * NPimg->Width;
+                            UINTN colBase = (j * factor);
+                            
+                            for (UINTN h = 0; h < factor; h++) {
+                                NPimg->Data[rowBase + colBase + h] = px;
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-    // --- PHASE 2: COMPOSITE INTERMEDIATE LAYERS ---
-    // Loop from Layer 1 up to the layer *below* our current sprite
-    for (UINTN layer = 1; layer < order; layer++) {
-        
-        if (curLayers[layer].Img == NULL) continue;
+        // --- STEP B: Inject the Current Sprite (Pimg) ---
+        // If we are at the requested layer, and NOT erasing, draw the sprite on top
+        if (layer == order && !skipCur) {
+            for (UINTN i = 0; i < Pimg->Height; i++) {
+                for (UINTN j = 0; j < Pimg->Width; j++) {
+                    
+                    UINT32 px = Pimg->Data[i * Pimg->Width + j];
 
-        UINTN gridX = screenX / 8;
-        UINTN gridY = screenY / 8;
+                    if (BinaryAlpha(px)) {
+                        // Explode the sprite pixel
+                        for (UINTN v = 0; v < factor; v++) {
+                            UINTN rowBase = ((i * factor) + v) * NPimg->Width;
+                            UINTN colBase = (j * factor);
 
-        for (UINTN i = 0; i < Pimg->Height; i++) {
-            for (UINTN j = 0; j < Pimg->Width; j++) {
-                
-                // Fetch pixel from 160x96 buffer
-                UINT32 layerPixel = curLayers[layer].Img->Data[(gridY + i) * 160 + (gridX + j)];
-
-                // If this layer has a visible pixel here, it covers the background
-                if (BinaryAlpha(layerPixel)) {
-                    for (UINTN v = 0; v < factor; v++) {
-                        UINTN destIdxBase = ((i * factor + v) * NPimg->Width) + (j * factor);
-                        for (UINTN h = 0; h < factor; h++) {
-                            NPimg->Data[destIdxBase + h] = layerPixel;
+                            for (UINTN h = 0; h < factor; h++) {
+                                NPimg->Data[rowBase + colBase + h] = px;
+                            }
                         }
                     }
                 }
@@ -181,29 +189,8 @@ VOID ExplodeAAwarePixelImage(
         }
     }
 
-    // If we are just erasing (restoring background), stop here.
-    if (skipCur) {
-        NPimg->isPixel = FALSE; 
-        return;
-    }
-
-    // --- PHASE 3: DRAW CURRENT SPRITE (STENCIL) ---
-    for (UINTN i = 0; i < Pimg->Height; i++) {
-        for (UINTN j = 0; j < Pimg->Width; j++) {
-            UINT32 fgPixel = Pimg->Data[i * Pimg->Width + j];
-
-            if (BinaryAlpha(fgPixel)) {
-                for (UINTN v = 0; v < factor; v++) {
-                    UINTN destIdxBase = ((i * factor + v) * NPimg->Width) + (j * factor);
-                    for (UINTN h = 0; h < factor; h++) {
-                        NPimg->Data[destIdxBase + h] = fgPixel;
-                    }
-                }
-            }
-        }
-    }
-
-    NPimg->isPixel = FALSE; 
+    NPimg->isPixel = FALSE; // Ready for Blt
+    NPimg->isAlpha = TRUE;
 }
 
 
@@ -485,7 +472,7 @@ VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawIm
                 8,
                 order,
                 FALSE,
-                Graphics,
+                // Graphics,
                 screenX,
                 screenY
             );
@@ -534,7 +521,7 @@ VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *Dra
         8,
         order,
         TRUE,
-        Graphics,
+        // Graphics,
         screenX,
         screenY
     );

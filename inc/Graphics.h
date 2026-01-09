@@ -150,7 +150,7 @@ VOID ExplodeAAwarePixelImage(
     UINTN factor,
     zOrder order,
     BOOLEAN skipCur,
-    EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
+    // EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
     UINTN screenX, UINTN screenY    
 );
 
