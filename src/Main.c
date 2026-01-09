@@ -1,6 +1,7 @@
 #include "efierr.h"
 #include "Helpers.h"
 #include "Images.h"
+#include "Game.h"
 
 Screen curScreen = {
     .ScreenHeight = 768,
@@ -13,9 +14,11 @@ Game curGame = {
     .state = LAUNCH,
 };
 
-ImageData curBgImg;
-
 ImageData patchBuffer;
+
+SpriteLayers curSprites[4];
+
+zBuffers curLayers[4];
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable) {
 
@@ -48,33 +51,34 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         .cursor.reDraw = FALSE,
         .cursor.Lclicked = FALSE,
         .cursor.Rclicked = FALSE,
-        .Over = {
-            .Width = Pointer.Width*8,  // Actual screen width (8 clean pixels * 8)
-            .Height = Pointer.Height*8, // Actual screen height
-            // Allocate for 64x64 ACTUAL pixels
-            .Data = Realloc(NULL, 0, (8*Pointer.Width) * (8*Pointer.Height) * sizeof(UINT32)),
-            .isAlpha = FALSE,
-            .isPixel = FALSE,
-        },
         .normalimg = Pointer, // Your "Clean" 8x8 image data
         .clickedimg = ClickedPointer,
     };
     EFI_STATUS Status;
 
     /* Draw the background */
-    curBgImg = BgImage;
-    patchImg *pQue;
-    setupScreenQue(&pQue);
-    patchImg *Img_Rocket = RequestPatchFromPool(pQue);
-    Img_Rocket->Nframes = 99;
-    Img_Rocket->Img = &Rocket;
-    Img_Rocket->X = 640;
-    Img_Rocket->Y = 768;
-    Img_Rocket->imageState = PERSIST;
-    DrawScreenUpdates(Graphics, &BgImage, FALSE, 0, 0);
-    DrawAAwarePixelImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
+    // patchImg *pQue;
+    setupScreenQue();
+    patchImg *ImgRocket = RequestPatchFromPool(THIRD);
+    ImgRocket->Img = &Rocket;
+    ImgRocket->X = 0;
+    ImgRocket->Y = 0;
+    ImgRocket->imageState = PERMANENT;
+    patchImg *backG = RequestPatchFromPool(0);
+    backG->imageState = PERMANENT;
+    backG->Img = &BgImage;
+    backG->X = 0;
+    backG->Y = 0;
+    backG->isDrawn = FALSE;
+    patchImg *frontL = RequestPatchFromPool(1);
+    frontL->imageState = PERMANENT;
+    frontL->Img = &IntroLayerOne;
+    frontL->X = 0;
+    frontL->Y = curScreen.ScreenHeight-IntroLayerOne.Height*8;
+    DoScreenUpdates(Graphics);
+    // DrawAAwarePixelImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
     /* Save the underlying bits of the cursor */
-    SaveDirectImage(Graphics, &curMouse.Over, curMouse.cursor.X, curMouse.cursor.Y);
+    // SaveDirectImage(Graphics, &curMouse.Over, curMouse.cursor.X, curMouse.cursor.Y);
     if (activeMouse == NULL) {
         cout->OutputString(cout, L"\rNo mouse available for interactive test!\n");
         cout->OutputString(cout, L"\rPress any key to exit!\n");
@@ -128,8 +132,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         TimerPeriodic,
         333333
     );
-    patchImg *screenQue;
-    setupScreenQue(&screenQue);
+    setupScreenQue();
     /* Main Event Loop */
     curScreen.isRunning = TRUE;
     while(curScreen.isRunning){

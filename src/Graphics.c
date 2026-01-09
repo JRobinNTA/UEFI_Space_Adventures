@@ -4,7 +4,6 @@
 #include "efidef.h"
 #include "efiprot.h"
 
-
 /* Draw rectangle */
 void DrawRect(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 x, UINT32 y, UINT32 color) {
     gop->Blt(
@@ -111,39 +110,88 @@ VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UIN
 }
 
 
+
+
 VOID ExplodeAAwarePixelImage(
-    ImageData *Pimg,                // Foreground (Downscaled)
-    ImageData *NPimg,               // Scratchpad (Exploded)
+    ImageData *Pimg,                // Foreground Sprite (Downscaled 8x8)
+    ImageData *NPimg,               // Destination (Exploded 64x64)
     UINTN factor,
-    BOOLEAN useBg,
+    zOrder order,                   // The Layer of the CURRENT sprite
+    BOOLEAN skipCur,                // Skip the current layer (Eraser mode)
     EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
-    UINTN screenX, UINTN screenY    
+    UINTN screenX, UINTN screenY
 ) {
+    // 1. Set dimensions for the Destination
     NPimg->Height = Pimg->Height * factor;
     NPimg->Width = Pimg->Width * factor;
 
-    /* PRE-FILL THE SCRATCHPAD (BACKGROUND) */
-    if (!useBg) {
-        /* Capture from Live Screen */
-        SaveDirectImage(Graphics, NPimg, screenX, screenY);
+    // --- PHASE 1: FETCH BASE BACKGROUND (LAYER 0) ---
+    if (curLayers[0].Img != NULL) {
+        
+        UINTN patchTotalSize = patchBuffer.Width * patchBuffer.Height; 
+        UINTN spriteSmallSize = Pimg->Width * Pimg->Height;            
+        
+        UINT32* safeMemoryZone = &patchBuffer.Data[patchTotalSize - spriteSmallSize];
+
+        ImageData bgTmp = {
+            .Width = Pimg->Width,     
+            .Height = Pimg->Height,   
+            .Data = safeMemoryZone,   
+            .isPixel = FALSE,         // <--- FIX IS HERE (Was TRUE)
+            .isAlpha = FALSE
+        };
+
+        // Capture 8x8 from Background Layer into 'safeMemoryZone'
+        // Since isPixel is FALSE, SaveIndirectImage treats it as a raw, packed buffer.
+        SaveIndirectImage(curLayers[0].Img, &bgTmp, screenX, screenY);
+
+        // Explode from 'safeMemoryZone' (8x8) into 'NPimg->Data' (64x64)
+        ExplodeAUnAwarePixelImage(&bgTmp, NPimg, factor);
     } 
     else {
-        /* curBgImg is our source, NPimg is the target buffer */
-        SaveIndirectImage(&curBgImg, NPimg, screenX, screenY);
+        // Fallback: Raw screen capture
+        SaveDirectImage(Graphics, NPimg, screenX, screenY);
+    }
 
-        /* Crucial Check: If the background we just pulled is ALSO pixelated explode it as well*/
-        if (NPimg->isPixel) {
-            /* To avoid recursion, we use a simple unaware explosion */
-            ExplodeAUnAwarePixelImage(NPimg, NPimg, factor);
+    // --- PHASE 2: COMPOSITE INTERMEDIATE LAYERS ---
+    // Loop from Layer 1 up to the layer *below* our current sprite
+    for (UINTN layer = 1; layer < order; layer++) {
+        
+        if (curLayers[layer].Img == NULL) continue;
+
+        UINTN gridX = screenX / 8;
+        UINTN gridY = screenY / 8;
+
+        for (UINTN i = 0; i < Pimg->Height; i++) {
+            for (UINTN j = 0; j < Pimg->Width; j++) {
+                
+                // Fetch pixel from 160x96 buffer
+                UINT32 layerPixel = curLayers[layer].Img->Data[(gridY + i) * 160 + (gridX + j)];
+
+                // If this layer has a visible pixel here, it covers the background
+                if (BinaryAlpha(layerPixel)) {
+                    for (UINTN v = 0; v < factor; v++) {
+                        UINTN destIdxBase = ((i * factor + v) * NPimg->Width) + (j * factor);
+                        for (UINTN h = 0; h < factor; h++) {
+                            NPimg->Data[destIdxBase + h] = layerPixel;
+                        }
+                    }
+                }
+            }
         }
     }
 
-    /* OVERWRITE FOREGROUND (STENCIL) */
+    // If we are just erasing (restoring background), stop here.
+    if (skipCur) {
+        NPimg->isPixel = FALSE; 
+        return;
+    }
+
+    // --- PHASE 3: DRAW CURRENT SPRITE (STENCIL) ---
     for (UINTN i = 0; i < Pimg->Height; i++) {
         for (UINTN j = 0; j < Pimg->Width; j++) {
             UINT32 fgPixel = Pimg->Data[i * Pimg->Width + j];
 
-            /* Only overwrite if the Foreground pixel is NOT Alpha-transparent */
             if (BinaryAlpha(fgPixel)) {
                 for (UINTN v = 0; v < factor; v++) {
                     UINTN destIdxBase = ((i * factor + v) * NPimg->Width) + (j * factor);
@@ -157,6 +205,8 @@ VOID ExplodeAAwarePixelImage(
 
     NPimg->isPixel = FALSE; 
 }
+
+
 
 /*
 ====================================================
@@ -194,21 +244,17 @@ VOID DrawAUnAwarePixelImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, ImageData *img, U
 VOID DoCursor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, Mouse *cur, Cursor *curCurs) {
     if (!curCurs->reDraw || Graphics == NULL) return;
 
-    /* RESTORE using 64x64 screen area */
-    DrawScreenUpdates(Graphics, &cur->Over, FALSE,cur->cursor.X, cur->cursor.Y);
+    RestoreScreenUpdates(Graphics, &cur->normalimg, 3, cur->cursor.X, cur->cursor.Y);
 
-    /* SAVE using 64x64 screen area */
-    SaveDirectImage(Graphics, &cur->Over, curCurs->X, curCurs->Y);
 
-    /* DRAW the cursor using your 8x8 clean data (DrawImage scales it to 64x64) */
     if(curCurs->Lclicked || curCurs->Rclicked){
-        DrawScreenUpdates(Graphics, &cur->clickedimg, FALSE, curCurs->X, curCurs->Y);
+        DrawScreenUpdates(Graphics, &cur->clickedimg, 3, curCurs->X, curCurs->Y);
         cur->cursor.Lclicked = curCurs->Lclicked;
         cur->cursor.Rclicked = curCurs->Rclicked;
     }
     else {
 
-        DrawScreenUpdates(Graphics, &cur->normalimg, FALSE, curCurs->X, curCurs->Y);
+        DrawScreenUpdates(Graphics, &cur->normalimg, 3, curCurs->X, curCurs->Y);
     }
 
     curCurs->reDraw = FALSE;
@@ -233,33 +279,112 @@ VOID SaveDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,ImageData* img, UINT
         screenY,
         0,
         0,
-        img->Height,
         img->Width,
+        img->Height,
         0
     );
 
 }
 
 
-VOID SaveIndirectImage(ImageData *saveImg, ImageData *bufferImg, UINTN imgX, UINTN imgY){
-    UINTN sourceX = imgX / 8;
-    UINTN sourceY = imgY / 8;
-    for (UINTN row = 0; row < bufferImg->Height; row++) {
-        /* Calculate the row offset in the full-size background */
-        UINTN bgOffset = ((sourceY+ row) * bufferImg->Width) + sourceX;
-        /* Calculate the row offset in the small 64x64 patch */
-        UINTN patchOffset = row * bufferImg->Width;
 
-        /* Perform a high-speed memory copy */
-        gBS->CopyMem(
-            &bufferImg->Data[patchOffset], 
-            &saveImg->Data[bgOffset], 
-            bufferImg->Width * sizeof(UINT32)
-        );
+VOID SaveIndirectImage(ImageData *saveImg, ImageData *bufferImg, UINTN imgX, UINTN imgY)
+{
+    if (saveImg == NULL || bufferImg == NULL || saveImg->Data == NULL || bufferImg->Data == NULL) {
+        return;
     }
+    if (saveImg->Width == 0 || saveImg->Height == 0 || bufferImg->Width == 0 || bufferImg->Height == 0) {
+        return;
+    }
+
+    // Factors are ONLY used to calculate the starting Offset (X/Y), not the width of data to copy
+    UINTN srcFactor = saveImg->isPixel ? 8 : 1;
+    UINTN dstFactor = bufferImg->isPixel ? 8 : 1;
+
+    const UINTN bytes_per_pixel = sizeof(UINT32);
+
+    // Case A: saveImg is the Large Background (capture a patch into bufferImg)
+    if (saveImg->Width >= bufferImg->Width && saveImg->Height >= bufferImg->Height) {
+
+        UINTN srcX = imgX / srcFactor;
+        UINTN srcY = imgY / srcFactor;
+
+        // Use the buffer's ACTUAL width, do not divide by factor again
+        UINTN copyWidth  = bufferImg->Width;
+        UINTN copyHeight = bufferImg->Height;
+
+        // Clip against source boundaries
+        if (srcX >= saveImg->Width || srcY >= saveImg->Height) {
+            goto DONE;
+        }
+
+        if (srcX + copyWidth > saveImg->Width) {
+            copyWidth = saveImg->Width - srcX;
+        }
+        if (srcY + copyHeight > saveImg->Height) {
+            copyHeight = saveImg->Height - srcY;
+        }
+
+        if (copyWidth == 0 || copyHeight == 0) {
+            goto DONE;
+        }
+
+        for (UINTN row = 0; row < copyHeight; row++) {
+            UINTN srcOffset = ((srcY + row) * saveImg->Width) + srcX;
+            UINTN dstOffset = row * bufferImg->Width; 
+
+            // Copy the memory. copyWidth is now the correct number of pixels (e.g., 160).
+            gBS->CopyMem(
+                &bufferImg->Data[dstOffset],
+                &saveImg->Data[srcOffset],
+                copyWidth * bytes_per_pixel
+            );
+        }
+    }
+    // Case B: bufferImg is the Large Canvas (paste saveImg into bufferImg)
+    else {
+
+        UINTN dstX = imgX / dstFactor;
+        UINTN dstY = imgY / dstFactor;
+
+        // Use the source's ACTUAL width
+        UINTN copyWidth  = saveImg->Width;
+        UINTN copyHeight = saveImg->Height;
+
+        // Clip against destination boundaries
+        if (dstX >= bufferImg->Width || dstY >= bufferImg->Height) {
+            goto DONE;
+        }
+
+        if (dstX + copyWidth > bufferImg->Width) {
+            copyWidth = bufferImg->Width - dstX;
+        }
+        if (dstY + copyHeight > bufferImg->Height) {
+            copyHeight = bufferImg->Height - dstY;
+        }
+
+        if (copyWidth == 0 || copyHeight == 0) {
+            goto DONE;
+        }
+
+        for (UINTN row = 0; row < copyHeight; row++) {
+            UINTN srcOffset = row * saveImg->Width; 
+            UINTN dstOffset = ((dstY + row) * bufferImg->Width) + dstX;
+
+            gBS->CopyMem(
+                &bufferImg->Data[dstOffset],
+                &saveImg->Data[srcOffset],
+                copyWidth * bytes_per_pixel
+            );
+        }
+    }
+
+DONE:
+    // Preserve pixel/alpha mode from source image
     bufferImg->isPixel = saveImg->isPixel;
     bufferImg->isAlpha = saveImg->isAlpha;
 }
+
 
 
 VOID GetMouseUpdates(EFI_SIMPLE_POINTER_PROTOCOL *Mouse, Cursor *cursPos){
@@ -285,44 +410,72 @@ VOID GetMouseUpdates(EFI_SIMPLE_POINTER_PROTOCOL *Mouse, Cursor *cursPos){
     cursPos->reDraw = TRUE;
 }
 
-VOID setupScreenQue(patchImg** pQue) {
-    /* Allocate all 8 slots at once */
-    *pQue = Realloc(NULL, 0, 16 * sizeof(patchImg));
+VOID setupScreenQue() {
+    for (UINTN i = 0; i < 4; i++) {
 
-    if (*pQue == NULL) return;
+        for (UINTN j = 0; j < SPRITES_PER_LAYER; j++) {
+            curSprites[i].ImgBuffer[j].Cframes = 0;
+            curSprites[i].ImgBuffer[j].Img = NULL;
+            curSprites[i].ImgBuffer[j].Nframes = 0;
+            curSprites[i].ImgBuffer[j].X = 0;
+            curSprites[i].ImgBuffer[j].Y = 0;
+            curSprites[i].ImgBuffer[j].imageState = STALE;
+            curSprites[i].ImgBuffer[j].isDrawn = FALSE;
+        }
 
-    for (UINTN i = 0; i < 16; i++) {
-        /* Access using the arrow on the base pointer, then index */
-        (*pQue)[i].imageState = STALE; 
-        (*pQue)[i].Img = NULL;
-        (*pQue)[i].replacedImg = NULL;
-        (*pQue)[i].X = 0;
-        (*pQue)[i].Y = 0;
+        curSprites[i].Layer = i;
+
+        if (i < 3) {
+            curSprites[i].nextImg = (SpriteLayers*)&curSprites[i + 1];
+        } else {
+            curSprites[i].nextImg = NULL;
+        }
+
+        if (i > 0) {
+            curSprites[i].prevImg = &curSprites[i - 1];
+        } else {
+            curSprites[i].prevImg = NULL;
+        }
+        curLayers[i].Img = Realloc(NULL, 0, sizeof(ImageData));
+        if (curLayers[i].Img != NULL) {
+            // 2. Allocate the raw PIXEL DATA inside the struct
+            curLayers[i].Img->Data = Realloc(NULL, 0, curScreen.ScreenWidth/8 * curScreen.ScreenHeight/8 * sizeof(UINT32));
+
+            // 3. Initialize the struct properties
+            curLayers[i].Img->Width = curScreen.ScreenWidth/8;
+            curLayers[i].Img->Height = curScreen.ScreenHeight/8;
+            curLayers[i].Img->isPixel = TRUE;  // Important for scaling logic!
+            curLayers[i].Img->isAlpha = TRUE;
+
+            // 4. Zero out the pixel buffer
+            if (curLayers[i].Img->Data != NULL) {
+                gBS->SetMem(curLayers[i].Img->Data, curScreen.ScreenWidth/8 * curScreen.ScreenHeight/8 * sizeof(UINT32), 0);
+            }
+        }
+        curLayers[i].layer = i;
     }
 }
 
 
-patchImg* RequestPatchFromPool(patchImg *pQue){
-    patchImg* found = NULL;
-    for(UINTN i = 0; i < 16; i++){
-        /* Find the first inactive buffer and push the image */
-        if(pQue[i].imageState == STALE && !pQue[i].isDrawn){
-            found = &pQue[i];
-            return found;
+patchImg* RequestPatchFromPool(zOrder order){
+    for(UINTN i = 0; i < SPRITES_PER_LAYER; i++){
+        patchImg *curImg = &curSprites[order].ImgBuffer[i];
+        if(curImg->imageState == STALE && !curImg->isDrawn){
+            return curImg;
         }
-        /* If a Permanent image has been already drawn give up the pointer */
-        else if (pQue[i].imageState == PERMANENT && pQue[i].isDrawn){
-            found = &pQue[i];
-            return found;
+        if(curImg->imageState == PERMANENT && curImg->isDrawn){
+            return curImg;
         }
-
     }
     return NULL;
 }
 
 
-VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, BOOLEAN useBg, UINTN screenX,UINTN screenY){
+VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, zOrder order, UINTN screenX,UINTN screenY){
     if(DrawImg == NULL) return;
+    /* Image data will always be pixelated */
+    /* push the image to our layer buffers before drawing */
+    SaveIndirectImage(DrawImg, curLayers[order].Img, screenX, screenY);
     ImageData *SourceToBlt = DrawImg; // Default to drawing the original data
     if(DrawImg->isPixel){
         if(DrawImg->isAlpha){
@@ -330,7 +483,8 @@ VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawIm
                 DrawImg, 
                 &patchBuffer, 
                 8,
-                useBg,
+                order,
+                FALSE,
                 Graphics,
                 screenX,
                 screenY
@@ -346,69 +500,95 @@ VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawIm
     DrawDirectImage(Graphics,SourceToBlt,screenX,screenY);
 }
 
+VOID ClearSpriteFromLayer(UINTN order, UINTN screenX, UINTN screenY, UINTN width, UINTN height) {
+    // 1. Convert screen coords to Grid coords (160x96 space)
+    if (order >= 4) return;
+    UINTN gridX = screenX / 8;
+    UINTN gridY = screenY / 8;
+    
+    // 2. Get the width of the collision buffer (160)
+    UINTN bufferWidth = curScreen.ScreenWidth / 8; 
 
-VOID SaveScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, patchImg *pQue){
-    switch(pQue->imageState){
-        case ACTIVE:
-        case PERSIST:{
-            if(pQue->useBg){
-                SaveIndirectImage(&curBgImg,pQue->replacedImg,pQue->X,pQue->Y);
-            }
-            else{
-                SaveDirectImage(Graphics, pQue->replacedImg, pQue->X, pQue->Y);
-            }
-            break;
-        }
-        case STALE:
-        case PERMANENT:
-            break;
+    // 3. Loop through the height of the sprite
+    for (UINTN row = 0; row < height; row++) {
+        
+        // Calculate the starting index for THIS specific row
+        UINTN offset = ((gridY + row) * bufferWidth) + gridX;
 
+        // Zero out ONLY the width of the sprite for this row
+        gBS->SetMem(
+            &curLayers[order].Img->Data[offset], // Address of start of row
+            width * sizeof(UINT32),        // Length (in bytes!)
+            0                              // Value
+        );
     }
 }
 
+VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, zOrder order, UINTN screenX,UINTN screenY){
 
-VOID DoScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, patchImg *pQue){
-    for(UINTN i = 0; i < 16; i++){
-        SaveScreenUpdates(Graphics,&pQue[i]);
-        /* Break if no more images left to draw */
-        if(pQue[i].imageState == STALE && !pQue[i].isDrawn) break;
-        switch(pQue[i].imageState){
-            /* Draw the image */
-            case ACTIVE:{
-                DrawScreenUpdates(Graphics,pQue[i].Img,pQue[i].useBg,pQue[i].X,pQue[i].Y);
-                pQue[i].imageState = STALE;
-                pQue[i].isDrawn = TRUE;
-                break;
-            }
-            /* Replace the image */
-            case STALE:{
-                if(pQue[i].isDrawn){
-                    DrawScreenUpdates(Graphics,pQue[i].replacedImg,FALSE,pQue[i].X,pQue[i].Y);
-                    pQue[i].isDrawn = FALSE;
+    if(DrawImg == NULL) return;
+    ClearSpriteFromLayer(order, screenX, screenY, DrawImg->Width, DrawImg->Height);
+    ExplodeAAwarePixelImage(
+        DrawImg, 
+        &patchBuffer, 
+        8,
+        order,
+        TRUE,
+        Graphics,
+        screenX,
+        screenY
+    );
+    DrawDirectImage(Graphics, &patchBuffer, screenX, screenY);
+}
+
+VOID DoScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics){
+    for(UINTN i = 0; i < 4; i++){
+
+        for(UINTN j = 0; j < SPRITES_PER_LAYER; j++){
+
+            patchImg *curImg = &curSprites[i].ImgBuffer[j];
+            switch(curImg->imageState){
+                /* Draw the image */
+                case ACTIVE:{
+                    DrawScreenUpdates(Graphics,curImg->Img,curSprites[i].Layer,curImg->X,curImg->Y);
+                    curImg->imageState = STALE;
+                    curImg->isDrawn = TRUE;
+                    break;
                 }
-                break;
-            }
-            /* Let the image Persist for a number of frames */
-            case PERSIST:{
-                /* If the image was not drawn draw it*/
-                if(pQue[i].isDrawn){
-                    pQue[i].Cframes++;
-                    if(pQue[i].Cframes >= pQue[i].Nframes) pQue[i].imageState = STALE;
+                /* Replace the image */
+                case STALE:{
+                    if(curImg->isDrawn){
+                        RestoreScreenUpdates(Graphics,curImg->Img,curSprites[i].Layer,curImg->X,curImg->Y);
+                        curImg->isDrawn = FALSE;
+                    }
+                    break;
                 }
-                /* Count the frames for which artifact must persist */
-                else{
-                    DrawScreenUpdates(Graphics,pQue[i].Img,pQue[i].useBg,pQue[i].X,pQue[i].Y);
-                    pQue[i].isDrawn = TRUE;
+                /* Let the image Persist for a number of frames */
+                case PERSIST:{
+                    /* If the image was not drawn draw it*/
+                    if(curImg->isDrawn){
+                        curImg->Cframes++;
+                        if(curImg->Cframes >= curImg->Nframes){
+                            curImg->imageState = STALE;
+                            curImg->Cframes = 0;
+                            curImg->Nframes = 0;
+                        }
+                    }
+                    /* Count the frames for which artifact must persist */
+                    else{
+                        DrawScreenUpdates(Graphics,curImg->Img,curSprites[i].Layer,curImg->X,curImg->Y);
+                        curImg->isDrawn = TRUE;
+                    }
+                    break;
                 }
-                break;
-            }
-            /* Permanent Image if it is drawn already do nothing */
-            case PERMANENT:{
-                if(!pQue[i].isDrawn){
-                    DrawScreenUpdates(Graphics,pQue[i].Img,pQue[i].useBg,pQue[i].X,pQue[i].Y);
-                    pQue[i].isDrawn = TRUE;
+                /* Permanent Image if it is drawn already do nothing */
+                case PERMANENT:{
+                    if(!curImg->isDrawn){
+                        DrawScreenUpdates(Graphics,curImg->Img,curSprites[i].Layer,curImg->X,curImg->Y);
+                        curImg->isDrawn = TRUE;
+                    }
+                    break;
                 }
-                break;
             }
         }
     }
