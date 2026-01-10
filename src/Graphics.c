@@ -4,7 +4,12 @@
 #include "efidef.h"
 #include "efiprot.h"
 
-/* Draw rectangle */
+
+/*
+========================
+Draw rectangle to screen
+========================
+*/
 void DrawRect(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 x, UINT32 y, UINT32 color) {
     gop->Blt(
         gop,
@@ -17,12 +22,19 @@ void DrawRect(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, UINT32 x, UINT32 y, UINT32 colo
     );
 }
 
+
+/*
+================================
+Helper to implement transparency
+================================
+*/
 BOOLEAN BinaryAlpha(UINT32 Pixel){
     if((Pixel >> 24) == 0xff){
         return TRUE;
     }
     else return FALSE;
 }
+
 
 /*
 ==================================================
@@ -60,6 +72,12 @@ VOID DrawAAwarePixelImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, ImageData *img, UIN
     }
 }
 
+
+/*
+=============================================================
+Explode a given Alpha UnAware Pixelated image to given buffer
+=============================================================
+*/
 VOID ExplodeAUnAwarePixelImage(ImageData *Pimg, ImageData *NPimg ) {
     UINTN factor = 8;
     NPimg->Height = Pimg->Height * factor;
@@ -93,6 +111,11 @@ VOID ExplodeAUnAwarePixelImage(ImageData *Pimg, ImageData *NPimg ) {
 }
 
 
+/*
+=====================================
+Draw a given image directly to screen
+=====================================
+*/
 VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UINTN imgX, UINTN imgY){
 
     Graphics->Blt(
@@ -111,6 +134,11 @@ VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UIN
 }
 
 
+/*
+=================================================
+Explode a given alpha aware pixel image to buffer
+=================================================
+*/
 VOID ExplodeAAwarePixelImage(
     ImageData *Pimg,            // Logical sprite (e.g. 8x8)
     ImageData *NPimg,           // Screen-space output (e.g. 64x64)
@@ -199,6 +227,11 @@ VOID DrawAUnAwarePixelImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, ImageData *img, U
 }
 
 
+/*
+=====================
+Do the cursor updates
+=====================
+*/
 VOID DoCursor(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, Mouse *cur, Cursor *curCurs) {
     if (!curCurs->reDraw || Graphics == NULL) return;
 
@@ -228,6 +261,11 @@ VOID EFIAPI ScreenUpdate(EFI_EVENT Event, VOID *Context) {
 }
 
 
+/*
+======================================
+Save an image directly from the screen
+======================================
+*/
 VOID SaveDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,ImageData* img, UINTN screenX, UINTN screenY){
     Graphics->Blt(
         Graphics, 
@@ -245,7 +283,11 @@ VOID SaveDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,ImageData* img, UINT
 }
 
 
-
+/*
+======================================
+Save a given image from a given buffer
+======================================
+*/
 VOID SaveIndirectImage(
     ImageData *saveImg, 
     ImageData *bufferImg, 
@@ -285,13 +327,17 @@ VOID SaveIndirectImage(
 
     }
 
-    // Preserve pixel/alpha mode from source image
+    /* Preserve pixel/alpha mode from source image */
     bufferImg->isPixel = saveImg->isPixel;
     bufferImg->isAlpha = saveImg->isAlpha;
 }
 
 
-
+/*
+===============================================
+Update the cursPos object with the current data
+===============================================
+*/
 VOID GetMouseUpdates(EFI_SIMPLE_POINTER_PROTOCOL *Mouse, Cursor *cursPos){
     EFI_SIMPLE_POINTER_STATE State;
     EFI_STATUS Status;
@@ -310,11 +356,19 @@ VOID GetMouseUpdates(EFI_SIMPLE_POINTER_PROTOCOL *Mouse, Cursor *cursPos){
         cursPos->X = curScreen.ScreenWidth - 64;
     if (cursPos->Y >= (INTN)(curScreen.ScreenHeight - 64)) 
         cursPos->Y = curScreen.ScreenHeight - 64;
+    cursPos->X = (cursPos->X / 8) * 8;
+    cursPos->Y = (cursPos->Y / 8) * 8;
     if(State.LeftButton) cursPos->Lclicked = TRUE;
     if(State.RightButton) cursPos->Rclicked = TRUE;
     cursPos->reDraw = TRUE;
 }
 
+
+/*
+========================
+Initialize the screenQue
+========================
+*/
 VOID setupScreenQue() {
     for (UINTN i = 0; i < 4; i++) {
 
@@ -330,17 +384,6 @@ VOID setupScreenQue() {
 
         curSprites[i].Layer = i;
 
-        if (i < 3) {
-            curSprites[i].nextImg = (SpriteLayers*)&curSprites[i + 1];
-        } else {
-            curSprites[i].nextImg = NULL;
-        }
-
-        if (i > 0) {
-            curSprites[i].prevImg = &curSprites[i - 1];
-        } else {
-            curSprites[i].prevImg = NULL;
-        }
         curLayers[i].Img = Realloc(NULL, 0, sizeof(ImageData));
         if (curLayers[i].Img != NULL) {
             // 2. Allocate the raw PIXEL DATA inside the struct
@@ -357,11 +400,15 @@ VOID setupScreenQue() {
                 gBS->SetMem(curLayers[i].Img->Data, curScreen.ScreenWidth/8 * curScreen.ScreenHeight/8 * sizeof(UINT32), 0);
             }
         }
-        curLayers[i].layer = i;
     }
 }
 
 
+/*
+================================================
+Request for an sprite patch from a specific layer
+================================================
+*/
 patchImg* RequestPatchFromPool(zOrder order){
     for(UINTN i = 0; i < SPRITES_PER_LAYER; i++){
         patchImg *curImg = &curSprites[order].ImgBuffer[i];
@@ -376,6 +423,11 @@ patchImg* RequestPatchFromPool(zOrder order){
 }
 
 
+/*
+=======================
+Draw the screen updates
+=======================
+*/
 VOID DrawScreenUpdates(
     EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, 
     ImageData *DrawImg, 
@@ -410,6 +462,12 @@ VOID DrawScreenUpdates(
     DrawDirectImage(Graphics,SourceToBlt,screenX,screenY);
 }
 
+
+/*
+======================
+Clear away the sprites
+======================
+*/
 VOID ClearSpriteFromLayer(UINTN order, UINTN screenX, UINTN screenY, UINTN width, UINTN height) {
     if (order >= 4) return;
     UINTN gridX = screenX / 8;
@@ -432,6 +490,12 @@ VOID ClearSpriteFromLayer(UINTN order, UINTN screenX, UINTN screenY, UINTN width
     }
 }
 
+
+/*
+=======================
+Restore the last sprite
+=======================
+*/
 VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, zOrder order, UINTN screenX,UINTN screenY){
 
     if(DrawImg == NULL) return;
@@ -447,6 +511,12 @@ VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *Dra
     DrawDirectImage(Graphics, &patchBuffer, screenX, screenY);
 }
 
+
+/*
+======================
+Dow the screen updates
+======================
+*/
 VOID DoScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics){
     for(UINTN i = 0; i < 4; i++){
 

@@ -2,7 +2,7 @@
 #include "efidef.h"
 #include <efi.h>
 
-#define SPRITES_PER_LAYER 4
+#define SPRITES_PER_LAYER 8
 
 #define LOGICAL_SCREEN_W 160
 #define LOGICAL_SCREEN_H 96
@@ -44,10 +44,10 @@ typedef enum{
 }patchState;
 
 typedef enum{
-    FIRST = 0,
+    LAST = 0,
     SECOND = 1,
     THIRD = 2,
-    FOUTH = 3,
+    FOURTH = 3,
 }zOrder;
 
 typedef struct{
@@ -64,14 +64,11 @@ typedef struct SpriteLayers SpriteLayers;
 
 struct SpriteLayers{
     patchImg ImgBuffer[SPRITES_PER_LAYER];
-    SpriteLayers *nextImg;
-    SpriteLayers *prevImg;
     zOrder Layer;
 };
 
 typedef struct{
     ImageData* Img;
-    zOrder layer;
 }zBuffers;
 
 extern Screen curScreen;
@@ -160,4 +157,10 @@ VOID ExplodeAUnAwarePixelImage(
     ImageData *NPimg
 );
 
-VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, zOrder order, UINTN screenX,UINTN screenY);
+VOID RestoreScreenUpdates(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, 
+    ImageData *DrawImg, 
+    zOrder order, 
+    UINTN screenX,
+    UINTN screenY
+);
