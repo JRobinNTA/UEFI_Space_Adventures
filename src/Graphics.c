@@ -264,7 +264,7 @@ VOID SaveIndirectImage(
             gBS->CopyMem(
                 &bufferImg->Data[dstOffset],
                 &saveImg->Data[srcOffset],
-                saveImg->Width * sizeof(UINT32)
+                bufferImg->Width * sizeof(UINT32)
             );
 
         }

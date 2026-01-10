@@ -62,12 +62,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     /* Draw the background */
     // patchImg *pQue;
     setupScreenQue();
+    scratchBuffer.Data = scratchData;
     patchImg *ImgRocket = RequestPatchFromPool(3);
     ImgRocket->Img = &Rocket;
     ImgRocket->X = 0;
     ImgRocket->Y = 0;
     ImgRocket->imageState = PERSIST;
-    ImgRocket->Nframes = 210;
+    ImgRocket->Nframes = 500;
     ImgRocket->isDrawn = FALSE;
 
     patchImg *backG = RequestPatchFromPool(0);
@@ -85,7 +86,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     frontL->isDrawn = FALSE;
 
     DoScreenUpdates(Graphics);
-    RestoreScreenUpdates(Graphics, ImgRocket->Img, 3, 0, 0);
     // DrawAAwarePixelImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
     /* Save the underlying bits of the cursor */
     // SaveDirectImage(Graphics, &curMouse.Over, curMouse.cursor.X, curMouse.cursor.Y);
@@ -142,13 +142,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         TimerPeriodic,
         333333
     );
-    setupScreenQue();
     /* Main Event Loop */
     curScreen.isRunning = TRUE;
     while(curScreen.isRunning){
         /* Wait for the timer and mouse input or keyboard input */
         gBS->WaitForEvent(3,Events,&index);
-        DoScreenUpdates(Graphics);
         if(index == 0){
              /* Get the current mouse state */
             GetMouseUpdates(activeMouse, &cursPos);
