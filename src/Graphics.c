@@ -60,7 +60,8 @@ VOID DrawAAwarePixelImage(EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, ImageData *img, UIN
     }
 }
 
-VOID ExplodeAUnAwarePixelImage(ImageData *Pimg, ImageData *NPimg, UINTN factor) {
+VOID ExplodeAUnAwarePixelImage(ImageData *Pimg, ImageData *NPimg ) {
+    UINTN factor = 8;
     NPimg->Height = Pimg->Height * factor;
     NPimg->Width = Pimg->Width * factor;
 
@@ -113,86 +114,56 @@ VOID DrawDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics, ImageData* img, UIN
 VOID ExplodeAAwarePixelImage(
     ImageData *Pimg,            // Logical sprite (e.g. 8x8)
     ImageData *NPimg,           // Screen-space output (e.g. 64x64)
-    UINTN factor,               // Usually 8
     zOrder order,               // The layer the sprite belongs to
-    BOOLEAN skipCur,            // If TRUE, don't draw Pimg (used for restoring background)
-    // EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
-    UINTN screenX, UINTN screenY
+    BOOLEAN skipSprite,         // If TRUE, don't draw Pimg (used for restoring background)
+    UINTN screenX,              // Actual screen COORDS
+    UINTN screenY
 ) {
-    if (!Pimg || !NPimg || !Pimg->Data || factor == 0) return;
+    UINTN factor = 8;
+    if (!Pimg || !NPimg || !Pimg->Data ) return;
 
-    // 1. Setup Output Dimensions
-    NPimg->Width  = Pimg->Width  * factor;
-    NPimg->Height = Pimg->Height * factor;
-    // UINTN dstSize = NPimg->Width * NPimg->Height;
-
-    // 2. Calculate Grid Coordinates (Where are we in the 160x96 buffers?)
     UINTN gridX = screenX / factor;
     UINTN gridY = screenY / factor;
+    
+    /* Instead of exploding each layer by layer */
+    /* first we compose the image fully and then explode */
 
-    // 3. Painter's Algorithm Loop: Layer 0 -> 1 -> 2 -> 3
-    for (UINTN layer = 0; layer < 4; layer++) {
+    /* save the background fully opaque */
+    scratchBuffer.Height = Pimg->Height;
+    scratchBuffer.Width = Pimg->Width;
+    scratchBuffer.isAlpha = TRUE;
+    scratchBuffer.isPixel = TRUE;
 
-        ImageData *globalLayer = curLayers[layer].Img;
-        
-        // --- STEP A: Draw the Global Layer Data for this patch ---
-        if (globalLayer && globalLayer->Data) {
-            for (UINTN i = 0; i < Pimg->Height; i++) {
-                UINTN srcY = gridY + i;
-                if (srcY >= globalLayer->Height) continue;
+    SaveIndirectImage(curLayers[0].Img, &scratchBuffer, screenX/8, screenY/8);
+    for(UINTN i = 1; i < 4; i++){
 
-                for (UINTN j = 0; j < Pimg->Width; j++) {
-                    UINTN srcX = gridX + j;
-                    if (srcX >= globalLayer->Width) continue;
+        for(UINTN j = 0; j < Pimg->Height;j++){
 
-                    // Fetch pixel from the global collision buffer
-                    UINT32 px = globalLayer->Data[srcY * globalLayer->Width + srcX];
+            UINTN srcY = gridY + j;
+            for(UINTN k = 0; k < Pimg->Width;k++){
 
-                    // Layer 0 is the base (Opaque), others adhere to Alpha
-                    if (layer == 0 || BinaryAlpha(px)) {
-                        
-                        // Explode the pixel (1x1 -> 8x8)
-                        for (UINTN v = 0; v < factor; v++) {
-                            UINTN rowBase = ((i * factor) + v) * NPimg->Width;
-                            UINTN colBase = (j * factor);
-                            
-                            for (UINTN h = 0; h < factor; h++) {
-                                NPimg->Data[rowBase + colBase + h] = px;
-                            }
-                        }
-                    }
+                UINTN srcX = gridX + k;
+
+                UINT32 pixel;
+                /* if we reached the sprite layer pull the pixels from the sprite itself */
+                if(i == order && !skipSprite){
+                    pixel = Pimg->Data[j*Pimg->Width + k];
                 }
-            }
-        }
+                else{
+                    pixel = curLayers[i].Img->Data[srcY * curLayers[i].Img->Width + srcX];
+                }
 
-        // --- STEP B: Inject the Current Sprite (Pimg) ---
-        // If we are at the requested layer, and NOT erasing, draw the sprite on top
-        if (layer == order && !skipCur) {
-            for (UINTN i = 0; i < Pimg->Height; i++) {
-                for (UINTN j = 0; j < Pimg->Width; j++) {
-                    
-                    UINT32 px = Pimg->Data[i * Pimg->Width + j];
-
-                    if (BinaryAlpha(px)) {
-                        // Explode the sprite pixel
-                        for (UINTN v = 0; v < factor; v++) {
-                            UINTN rowBase = ((i * factor) + v) * NPimg->Width;
-                            UINTN colBase = (j * factor);
-
-                            for (UINTN h = 0; h < factor; h++) {
-                                NPimg->Data[rowBase + colBase + h] = px;
-                            }
-                        }
-                    }
+                /* overwrite only opaque pixels */
+                if(BinaryAlpha(pixel)){
+                    scratchBuffer.Data[j*scratchBuffer.Width + k] = pixel;
                 }
             }
         }
     }
-
+    ExplodeAUnAwarePixelImage(&scratchBuffer,NPimg);
     NPimg->isPixel = FALSE; // Ready for Blt
     NPimg->isAlpha = TRUE;
 }
-
 
 
 /*
@@ -275,98 +246,45 @@ VOID SaveDirectImage(EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,ImageData* img, UINT
 
 
 
-VOID SaveIndirectImage(ImageData *saveImg, ImageData *bufferImg, UINTN imgX, UINTN imgY)
-{
-    if (saveImg == NULL || bufferImg == NULL || saveImg->Data == NULL || bufferImg->Data == NULL) {
-        return;
-    }
-    if (saveImg->Width == 0 || saveImg->Height == 0 || bufferImg->Width == 0 || bufferImg->Height == 0) {
-        return;
-    }
+VOID SaveIndirectImage(
+    ImageData *saveImg, 
+    ImageData *bufferImg, 
+    UINTN imgX, // The coords are image coords not bloody screen coords
+    UINTN imgY
+){
+    if (!saveImg || !bufferImg ) return;
 
-    // Factors are ONLY used to calculate the starting Offset (X/Y), not the width of data to copy
-    UINTN srcFactor = saveImg->isPixel ? 8 : 1;
-    UINTN dstFactor = bufferImg->isPixel ? 8 : 1;
+    /* Remember imgX and imgY are image coords so no need to check for scaling here */
 
-    const UINTN bytes_per_pixel = sizeof(UINT32);
-
-    // Case A: saveImg is the Large Background (capture a patch into bufferImg)
+    /* If saveImg is larger capture a patch from saveImg at imgX and imgY to bufferImg */
     if (saveImg->Width >= bufferImg->Width && saveImg->Height >= bufferImg->Height) {
-
-        UINTN srcX = imgX / srcFactor;
-        UINTN srcY = imgY / srcFactor;
-
-        // Use the buffer's ACTUAL width, do not divide by factor again
-        UINTN copyWidth  = bufferImg->Width;
-        UINTN copyHeight = bufferImg->Height;
-
-        // Clip against source boundaries
-        if (srcX >= saveImg->Width || srcY >= saveImg->Height) {
-            goto DONE;
-        }
-
-        if (srcX + copyWidth > saveImg->Width) {
-            copyWidth = saveImg->Width - srcX;
-        }
-        if (srcY + copyHeight > saveImg->Height) {
-            copyHeight = saveImg->Height - srcY;
-        }
-
-        if (copyWidth == 0 || copyHeight == 0) {
-            goto DONE;
-        }
-
-        for (UINTN row = 0; row < copyHeight; row++) {
-            UINTN srcOffset = ((srcY + row) * saveImg->Width) + srcX;
-            UINTN dstOffset = row * bufferImg->Width; 
-
-            // Copy the memory. copyWidth is now the correct number of pixels (e.g., 160).
+        for(UINTN i = 0; i < bufferImg->Height; i++){
+            UINTN srcOffset = (imgY + i) * saveImg->Width + imgX;
+            UINTN dstOffset = i * bufferImg->Width;
             gBS->CopyMem(
                 &bufferImg->Data[dstOffset],
                 &saveImg->Data[srcOffset],
-                copyWidth * bytes_per_pixel
+                saveImg->Width * sizeof(UINT32)
             );
+
         }
+
     }
-    // Case B: bufferImg is the Large Canvas (paste saveImg into bufferImg)
+
+    /* if bufferImg is large capture saveImg fully to bufferImg at imgX and imgY */
     else {
-
-        UINTN dstX = imgX / dstFactor;
-        UINTN dstY = imgY / dstFactor;
-
-        // Use the source's ACTUAL width
-        UINTN copyWidth  = saveImg->Width;
-        UINTN copyHeight = saveImg->Height;
-
-        // Clip against destination boundaries
-        if (dstX >= bufferImg->Width || dstY >= bufferImg->Height) {
-            goto DONE;
-        }
-
-        if (dstX + copyWidth > bufferImg->Width) {
-            copyWidth = bufferImg->Width - dstX;
-        }
-        if (dstY + copyHeight > bufferImg->Height) {
-            copyHeight = bufferImg->Height - dstY;
-        }
-
-        if (copyWidth == 0 || copyHeight == 0) {
-            goto DONE;
-        }
-
-        for (UINTN row = 0; row < copyHeight; row++) {
-            UINTN srcOffset = row * saveImg->Width; 
-            UINTN dstOffset = ((dstY + row) * bufferImg->Width) + dstX;
-
+        for(UINTN i = 0; i < saveImg->Height; i++){
+            UINTN srcOffset = i * saveImg->Width;
+            UINTN dstOffset = ((imgY + i) * bufferImg->Width) + imgX;
             gBS->CopyMem(
                 &bufferImg->Data[dstOffset],
                 &saveImg->Data[srcOffset],
-                copyWidth * bytes_per_pixel
+                saveImg->Width * sizeof(UINT32)
             );
         }
+
     }
 
-DONE:
     // Preserve pixel/alpha mode from source image
     bufferImg->isPixel = saveImg->isPixel;
     bufferImg->isAlpha = saveImg->isAlpha;
@@ -458,18 +376,23 @@ patchImg* RequestPatchFromPool(zOrder order){
 }
 
 
-VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, zOrder order, UINTN screenX,UINTN screenY){
+VOID DrawScreenUpdates(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, 
+    ImageData *DrawImg, 
+    zOrder order, 
+    UINTN screenX,
+    UINTN screenY
+){
     if(DrawImg == NULL) return;
     /* Image data will always be pixelated */
     /* push the image to our layer buffers before drawing */
-    SaveIndirectImage(DrawImg, curLayers[order].Img, screenX, screenY);
+    SaveIndirectImage(DrawImg, curLayers[order].Img, screenX/8, screenY/8);
     ImageData *SourceToBlt = DrawImg; // Default to drawing the original data
     if(DrawImg->isPixel){
         if(DrawImg->isAlpha){
             ExplodeAAwarePixelImage(
                 DrawImg, 
                 &patchBuffer, 
-                8,
                 order,
                 FALSE,
                 // Graphics,
@@ -479,7 +402,7 @@ VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawIm
 
         }
         else{
-            ExplodeAUnAwarePixelImage(DrawImg,&patchBuffer, 8);
+            ExplodeAUnAwarePixelImage(DrawImg,&patchBuffer);
 
         }
         SourceToBlt = &patchBuffer;
@@ -488,12 +411,10 @@ VOID DrawScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawIm
 }
 
 VOID ClearSpriteFromLayer(UINTN order, UINTN screenX, UINTN screenY, UINTN width, UINTN height) {
-    // 1. Convert screen coords to Grid coords (160x96 space)
     if (order >= 4) return;
     UINTN gridX = screenX / 8;
     UINTN gridY = screenY / 8;
     
-    // 2. Get the width of the collision buffer (160)
     UINTN bufferWidth = curScreen.ScreenWidth / 8; 
 
     // 3. Loop through the height of the sprite
@@ -518,10 +439,8 @@ VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *Dra
     ExplodeAAwarePixelImage(
         DrawImg, 
         &patchBuffer, 
-        8,
         order,
         TRUE,
-        // Graphics,
         screenX,
         screenY
     );

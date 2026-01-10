@@ -6,6 +6,7 @@
 
 #define LOGICAL_SCREEN_W 160
 #define LOGICAL_SCREEN_H 96
+
 typedef struct{
     UINTN ScreenWidth;
     UINTN ScreenHeight;
@@ -77,6 +78,8 @@ extern Screen curScreen;
 extern ImageData patchBuffer;
 extern SpriteLayers curSprites[4];
 extern zBuffers curLayers[4];
+extern UINT32 scratchData[LOGICAL_SCREEN_H*LOGICAL_SCREEN_W];
+extern ImageData scratchBuffer;
 VOID DrawAAwarePixelImage(
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop, 
     ImageData *img, 
@@ -147,17 +150,14 @@ VOID DrawScreenUpdates(
 VOID ExplodeAAwarePixelImage(
     ImageData *Pimg,                // Foreground (Downscaled)
     ImageData *NPimg,               // Scratchpad (Exploded)
-    UINTN factor,
     zOrder order,
-    BOOLEAN skipCur,
-    // EFI_GRAPHICS_OUTPUT_PROTOCOL* Graphics,
+    BOOLEAN skipSprite,
     UINTN screenX, UINTN screenY    
 );
 
 VOID ExplodeAUnAwarePixelImage(
     ImageData *Pimg, 
-    ImageData *NPimg, 
-    UINTN factor
+    ImageData *NPimg
 );
 
 VOID RestoreScreenUpdates(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, ImageData *DrawImg, zOrder order, UINTN screenX,UINTN screenY);

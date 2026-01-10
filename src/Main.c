@@ -20,6 +20,9 @@ SpriteLayers curSprites[4];
 
 zBuffers curLayers[4];
 
+UINT32 scratchData[LOGICAL_SCREEN_H*LOGICAL_SCREEN_W];
+ImageData scratchBuffer;
+
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable) {
 
     Globalize(ImageHandle, SystemTable);
@@ -59,23 +62,30 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     /* Draw the background */
     // patchImg *pQue;
     setupScreenQue();
-    patchImg *ImgRocket = RequestPatchFromPool(THIRD);
+    patchImg *ImgRocket = RequestPatchFromPool(3);
     ImgRocket->Img = &Rocket;
     ImgRocket->X = 0;
     ImgRocket->Y = 0;
-    ImgRocket->imageState = PERMANENT;
+    ImgRocket->imageState = PERSIST;
+    ImgRocket->Nframes = 210;
+    ImgRocket->isDrawn = FALSE;
+
     patchImg *backG = RequestPatchFromPool(0);
     backG->imageState = PERMANENT;
     backG->Img = &BgImage;
     backG->X = 0;
     backG->Y = 0;
     backG->isDrawn = FALSE;
+
     patchImg *frontL = RequestPatchFromPool(1);
     frontL->imageState = PERMANENT;
     frontL->Img = &IntroLayerOne;
     frontL->X = 0;
     frontL->Y = curScreen.ScreenHeight-IntroLayerOne.Height*8;
+    frontL->isDrawn = FALSE;
+
     DoScreenUpdates(Graphics);
+    RestoreScreenUpdates(Graphics, ImgRocket->Img, 3, 0, 0);
     // DrawAAwarePixelImage(Graphics, &IntroLayerOne, 0, curScreen.ScreenHeight-IntroLayerOne.Height*8);
     /* Save the underlying bits of the cursor */
     // SaveDirectImage(Graphics, &curMouse.Over, curMouse.cursor.X, curMouse.cursor.Y);
@@ -138,7 +148,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     while(curScreen.isRunning){
         /* Wait for the timer and mouse input or keyboard input */
         gBS->WaitForEvent(3,Events,&index);
-
+        DoScreenUpdates(Graphics);
         if(index == 0){
              /* Get the current mouse state */
             GetMouseUpdates(activeMouse, &cursPos);
